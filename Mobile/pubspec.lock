@@ -304,6 +304,15 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.0"
+  mjpeg_stream:
+    dependency: "direct main"
+    description:
+      path: "."
+      ref: main
+      resolved-ref: b7266a4a55d846abf5ae43e2f1f8f35eb03edb3f
+      url: "https://github.com/MohammedShamseerPV/MJPEG-Stream.git"
+    source: git
+    version: "1.0.0"
   path:
     dependency: transitive
     description:
