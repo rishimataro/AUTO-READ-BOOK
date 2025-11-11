@@ -31,7 +31,7 @@ class _ReadBookScreenState extends State<ReadBookScreen> {
           AspectRatio(
             aspectRatio: 16 / 9,
             child: MJPEGStreamScreen(
-              streamUrl: 'http://10.150.79.13:8080/?action=stream',
+              streamUrl: 'http://10.65.250.13:8080/?action=stream',
               showLiveIcon: true,
             ),
           ),
