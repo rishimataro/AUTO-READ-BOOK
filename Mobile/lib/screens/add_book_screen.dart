@@ -20,6 +20,7 @@ class _AddBookScreenState extends State<AddBookScreen> {
   String? _imagePath;
 
   bool _isEditing = false;
+  bool _isFavorited = false;
   final _titleController = TextEditingController();
   final _authorController = TextEditingController();
   final _categoryController = TextEditingController();
@@ -43,11 +44,16 @@ class _AddBookScreenState extends State<AddBookScreen> {
   Future<void> _loadBookData() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
+    
+    final title = prefs.getString('book_title') ?? "Tên của sách";
+    final favoriteBooks = prefs.getStringList('favorite_books') ?? [];
+
     setState(() {
-      _title = prefs.getString('book_title') ?? "Tên của sách";
+      _title = title;
       _author = prefs.getString('book_author') ?? "Tác giả";
       _category = prefs.getString('book_category') ?? "Thể loại";
       _imagePath = prefs.getString('book_imagePath');
+      _isFavorited = favoriteBooks.contains(_title); // Check if book is in favorites
 
       _titleController.text = _title;
       _authorController.text = _author;
@@ -101,7 +107,8 @@ class _AddBookScreenState extends State<AddBookScreen> {
       _author = "Tác giả";
       _category = "Thể loại";
       _imagePath = null;
-      _isEditing = false; // Exit editing mode when resetting
+      _isEditing = false;
+      _isFavorited = false;
       _updateControllers();
     });
   }
@@ -114,7 +121,6 @@ class _AddBookScreenState extends State<AddBookScreen> {
 
   void _toggleEditMode() {
     if (_isDefaultBook && !_isEditing) {
-      // Don't allow editing the default book, instead, start fresh
       setState(() {
         _title = '';
         _author = '';
@@ -127,7 +133,6 @@ class _AddBookScreenState extends State<AddBookScreen> {
 
     setState(() {
       if (_isEditing) {
-        // Save changes
         _title = _titleController.text.isNotEmpty ? _titleController.text : "Tên của sách";
         _author = _authorController.text.isNotEmpty ? _authorController.text : "Tác giả";
         _category = _categoryController.text.isNotEmpty ? _categoryController.text : "Thể loại";
@@ -136,6 +141,32 @@ class _AddBookScreenState extends State<AddBookScreen> {
       _isEditing = !_isEditing;
     });
   }
+
+  // --- START: FIXED FUNCTION ---
+  Future<void> _toggleFavorite() async {
+    if (_isDefaultBook || _isEditing) return;
+
+    // Immediately update the UI optimistically
+    setState(() {
+      _isFavorited = !_isFavorited;
+    });
+
+    // Then, handle the persistence logic asynchronously.
+    final prefs = await SharedPreferences.getInstance();
+    final favoriteBooks = prefs.getStringList('favorite_books') ?? [];
+
+    // Use the now-updated _isFavorited state to guide persistence
+    if (_isFavorited) {
+      if (!favoriteBooks.contains(_title)) {
+        favoriteBooks.add(_title);
+      }
+    } else {
+      favoriteBooks.remove(_title);
+    }
+
+    await prefs.setStringList('favorite_books', favoriteBooks);
+  }
+  // --- END: FIXED FUNCTION ---
 
   Future<void> _pickImage() async {
     if (!_isEditing) return;
@@ -148,9 +179,8 @@ class _AddBookScreenState extends State<AddBookScreen> {
     }
   }
 
-
   Future<void> _navigateToReadScreen() async {
-    if (_isEditing) return; // Don't allow reading while editing
+    if (_isEditing) return;
     final bool? hasFinishedReading = await Navigator.push(
       context,
       MaterialPageRoute(
@@ -164,7 +194,7 @@ class _AddBookScreenState extends State<AddBookScreen> {
     if (hasFinishedReading == true) {
       await _addBookToLibraryAndReset();
     }
-}
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -199,12 +229,27 @@ class _AddBookScreenState extends State<AddBookScreen> {
                 onPressed: _resetBookData,
               ),
             ),
+          // --- START: FAVORITE BUTTON WIDGET ---
+          if (isBookLoaded && !_isEditing)
+             Positioned(
+              top: 40,
+              right: 16,
+              child: IconButton(
+                icon: Icon(
+                  _isFavorited ? Icons.star : Icons.star_border,
+                  color: _isFavorited ? Colors.yellow : Colors.white,
+                  size: 30,
+                ),
+                onPressed: _toggleFavorite,
+              ),
+            ),
+          // --- END: FAVORITE BUTTON WIDGET ---
           Positioned(
             top: 50,
             left: 0,
             right: 0,
             child: Text(
-              _isEditing ? "Chỉnh sửa sách" : "Thêm mới",
+              _isEditing ? "Chỉnh sửa sách" : (_isDefaultBook ? "Thêm mới" : ""),
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white,
@@ -289,6 +334,7 @@ class _AddBookScreenState extends State<AddBookScreen> {
                       ),
                     ],
                     const SizedBox(height: 40),
+                    if (!_isDefaultBook)
                     ElevatedButton(
                       onPressed: _toggleEditMode,
                       style: ElevatedButton.styleFrom(

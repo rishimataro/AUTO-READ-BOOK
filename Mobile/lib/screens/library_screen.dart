@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'add_book_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
@@ -13,27 +14,47 @@ class LibraryScreen extends StatefulWidget {
 
 class _LibraryScreenState extends State<LibraryScreen> {
   List<Map<String, dynamic>> _readBooks = [];
+  List<Map<String, dynamic>> _favoriteBooks = [];
   bool _isSelectionMode = false;
   final Set<int> _selectedBooks = <int>{};
 
   @override
   void initState() {
     super.initState();
-    _loadReadBooks();
+    _loadAllBooks();
   }
 
-  Future<void> _loadReadBooks() async {
+  Future<void> _loadAllBooks() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
+
+    // --- Defensive Loading for Read Books ---
     final readBooksJson = prefs.getStringList('read_books') ?? [];
+    final allReadBooks = readBooksJson.map((bookString) {
+      try {
+        final book = json.decode(bookString) as Map<String, dynamic>;
+        // Ensure book has a valid title to prevent errors
+        if (book['title'] != null && (book['title'] as String).isNotEmpty) {
+          return book;
+        }
+      } catch (e) {
+        // Ignore books with parsing errors
+      }
+      return null;
+    }).where((book) => book != null).cast<Map<String, dynamic>>().toList();
+
+    // --- Defensive Loading for Favorite Books ---
+    final favoriteBookTitles = Set<String>.from(prefs.getStringList('favorite_books') ?? []);
+    final favoriteBooksList = allReadBooks
+        .where((book) => favoriteBookTitles.contains(book['title']))
+        .toList();
+
     setState(() {
-      _readBooks = readBooksJson
-          .map((book) => json.decode(book) as Map<String, dynamic>)
-          .toList()
-          .reversed
-          .toList(); // Show latest read books first
+      _readBooks = allReadBooks.reversed.toList();
+      _favoriteBooks = favoriteBooksList.reversed.toList();
     });
   }
+
 
   void _toggleSelectionMode() {
     setState(() {
@@ -42,8 +63,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     });
   }
 
-  void _onBookTap(int index) {
-    if (_isSelectionMode) {
+  void _onBookTap(int index, bool isFavoriteList) {
+    if (_isSelectionMode && !isFavoriteList) {
       setState(() {
         if (_selectedBooks.contains(index)) {
           _selectedBooks.remove(index);
@@ -52,10 +73,32 @@ class _LibraryScreenState extends State<LibraryScreen> {
         }
       });
     } else {
-      // Handle normal tap, e.g., open book details
+      final book = isFavoriteList ? _favoriteBooks[index] : _readBooks[index];
+      _navigateToBookDetails(book);
     }
   }
 
+  Future<void> _navigateToBookDetails(Map<String, dynamic> book) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('book_title', book['title'] ?? 'Không có tên');
+    await prefs.setString('book_author', book['author'] ?? 'Không có tác giả');
+    if (book['imagePath'] != null) {
+      await prefs.setString('book_imagePath', book['imagePath']);
+    } else {
+      await prefs.remove('book_imagePath');
+    }
+
+    // Await the result of Navigator.push and then reload
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const AddBookScreen()),
+    );
+
+    // After returning, reload ALL books to refresh both lists.
+    await _loadAllBooks();
+  }
+
+  // --- MODIFIED DELETE FUNCTION ---
   Future<void> _deleteSelectedBooks() async {
     if (_selectedBooks.isEmpty) return;
 
@@ -81,9 +124,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
     if (confirmDelete == true) {
       final prefs = await SharedPreferences.getInstance();
-      final readBooksJson = prefs.getStringList('read_books') ?? [];
 
-      // The display list is reversed, original indices must be calculated
+      // Identify the titles of the books being deleted
+      final titlesToDelete = _selectedBooks
+          .map((index) => _readBooks[index]['title'] as String?)
+          .where((title) => title != null)
+          .toSet();
+
+      // Remove these titles from the favorites list in SharedPreferences
+      if (titlesToDelete.isNotEmpty) {
+        final favoriteBookTitles = prefs.getStringList('favorite_books') ?? [];
+        favoriteBookTitles.removeWhere((favTitle) => titlesToDelete.contains(favTitle));
+        await prefs.setStringList('favorite_books', favoriteBookTitles);
+      }
+
+      // Proceed with deleting from the main "read_books" list
+      final readBooksJson = prefs.getStringList('read_books') ?? [];
       final originalIndicesToDelete = _selectedBooks
           .map((reversedIndex) => (readBooksJson.length - 1) - reversedIndex)
           .toSet();
@@ -96,9 +152,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
       }
 
       await prefs.setStringList('read_books', updatedBooksJson);
-      await _loadReadBooks(); // Refresh the list
-
-      // Exit selection mode after deleting
+      
+      // Reload all data from scratch and exit selection mode
+      await _loadAllBooks();
       _toggleSelectionMode();
     }
   }
@@ -158,7 +214,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       backgroundColor: const Color(0xFFF6F6F6),
       appBar: _buildAppBar(),
       body: RefreshIndicator(
-        onRefresh: _loadReadBooks,
+        onRefresh: _loadAllBooks,
         child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 16.0),
           child: Column(
@@ -181,11 +237,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
               const SizedBox(height: 24),
               _buildSectionTitle("Sách đã đọc"),
               const SizedBox(height: 16),
-              _buildReadBooksList(),
+              _buildBooksList(_readBooks, isFavoriteList: false),
               const SizedBox(height: 24),
               _buildSectionTitle("Sách yêu thích"),
               const SizedBox(height: 16),
-              _buildFavoriteBooksPlaceholder(),
+              _buildBooksList(_favoriteBooks, isFavoriteList: true),
             ],
           ),
         ),
@@ -204,15 +260,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
-  Widget _buildReadBooksList() {
-    if (_readBooks.isEmpty) {
-      return const SizedBox(
-        height: 180,
+  Widget _buildBooksList(List<Map<String, dynamic>> books, {required bool isFavoriteList}) {
+    if (books.isEmpty) {
+      return Container(
+         height: isFavoriteList ? 120 : 180,
+         decoration: isFavoriteList ? BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(15.0),
+            border: Border.all(color: Colors.grey[300]!),
+         ) : null,
         child: Center(
           child: Text(
-            "Bạn chưa đọc cuốn sách nào.\nSách bạn đã đọc xong sẽ xuất hiện ở đây.",
+            isFavoriteList
+              ? "Sách bạn yêu thích sẽ xuất hiện ở đây."
+              : "Bạn chưa đọc cuốn sách nào.\nSách bạn đã đọc xong sẽ xuất hiện ở đây.",
             textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey),
+            style: const TextStyle(color: Colors.grey),
           ),
         ),
       );
@@ -222,15 +285,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
       height: 210,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
-        itemCount: _readBooks.length,
+        itemCount: books.length,
         itemBuilder: (context, index) {
-          final book = _readBooks[index];
+          final book = books[index];
           final imagePath = book['imagePath'] as String?;
           final title = book['title'] as String? ?? 'Không có tên';
-          final isSelected = _selectedBooks.contains(index);
+          final isSelected = !isFavoriteList && _selectedBooks.contains(index);
 
           return GestureDetector(
-            onTap: () => _onBookTap(index),
+            onTap: () => _onBookTap(index, isFavoriteList),
             child: Container(
               width: 130,
               margin: const EdgeInsets.only(right: 16),
@@ -255,18 +318,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                 child: const Icon(Icons.book, size: 50, color: Colors.grey),
                               ),
                       ),
-                      if (_isSelectionMode)
+                      if (isSelected)
                         Positioned.fill(
                           child: Container(
                             decoration: BoxDecoration(
-                              color: isSelected
-                                  ? Colors.black.withOpacity(0.5)
-                                  : Colors.transparent,
+                              color: Colors.black.withOpacity(0.5),
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: isSelected
-                                ? const Icon(Icons.check_circle, color: Colors.white, size: 40)
-                                : null,
+                            child: const Icon(Icons.check_circle, color: Colors.white, size: 40),
                           ),
                         ),
                     ],
@@ -283,23 +342,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ),
           );
         },
-      ),
-    );
-  }
-
-  Widget _buildFavoriteBooksPlaceholder() {
-    return Container(
-      height: 120,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(15.0),
-        border: Border.all(color: Colors.grey[300]!),
-      ),
-      child: const Center(
-        child: Text(
-          "Sách bạn yêu thích sẽ xuất hiện ở đây.",
-          style: TextStyle(color: Colors.grey),
-        ),
       ),
     );
   }
